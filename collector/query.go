@@ -33,7 +33,8 @@ const (
 	SUM(num_locks_waiting) as lock_waiting,
 	SUM(num_locks_held) as lock_active,
 	SUM(lock_wait_time) as lock_wait_time,
-	SUM(lock_timeouts) as lock_timeout_count
+	SUM(lock_timeouts) as lock_timeout_count,
+	SUM(lock_escals) as lock_escals
 	FROM TABLE(MON_GET_DATABASE(-2)) WITH UR
 	`
 
@@ -78,4 +79,12 @@ WHERE T.MEMBER = I.ID and T.TBSP_ID = TSDETAIL.TBSPACEID WITH UR`
                 END AS HIT_RATIO
         FROM BPMETRICS AS BP, TABLE(DB2_GET_INSTANCE_INFO(null,'','','',null)) as I , SYSCAT.BUFFERPOOLS as BDETAIL
     WHERE BP.MEMBER = I.ID and BP.bp_name = BDETAIL.BPNAME WITH UR`
+
+	detailedLockWaitsQuery = `SELECT
+	LOCK_MODE,
+	LOCK_OBJECT_TYPE,
+	COUNT(*) AS WAIT_COUNT
+	FROM TABLE(MON_GET_LOCKS(NULL, -2))
+	WHERE LOCK_STATUS = 'W'
+	GROUP BY LOCK_MODE, LOCK_OBJECT_TYPE`
 )

@@ -35,6 +35,8 @@ const (
 	labelBufferpoolName   = "bufferpool_name"
 	labelDatabaseName     = "database_name"
 	labelLockState        = "lock_state"
+	labelLockMode         = "lock_mode"
+	labelLockObjectType   = "lock_object_type"
 	labelMember           = "member"
 	labelHomeHost         = "home_host"
 	labelPartitionGroup   = "partition_group"
@@ -61,6 +63,8 @@ type Collector struct {
 	lockUsage            *prometheus.Desc
 	lockWaitTime         *prometheus.Desc
 	lockTimeoutCount     *prometheus.Desc
+	lockEscalsTotal      *prometheus.Desc
+	currentLockWaits     *prometheus.Desc
 	bufferpoolHitRatio   *prometheus.Desc
 	rowCount             *prometheus.Desc
 	tablespaceUsage      *prometheus.Desc
@@ -118,6 +122,18 @@ func NewCollector(logger log.Logger, cfg *Config) *Collector {
 			[]string{labelDatabaseName},
 			nil,
 		),
+		lockEscalsTotal: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "lock", "escalations_total"),
+			"The total number of lock escalations.",
+			[]string{labelDatabaseName},
+			nil,
+		),
+		currentLockWaits: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "lock", "waits_current"),
+			"The current number of connections waiting for locks by lock mode and object type.",
+			[]string{labelDatabaseName, labelLockMode, labelLockObjectType},
+			nil,
+		),
 		bufferpoolHitRatio: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "bufferpool", "hit_ratio"),
 			"The percentage of time that the database manager did not need to load a page from disk to service a page request.",
@@ -166,6 +182,8 @@ func (c *Collector) Describe(descs chan<- *prometheus.Desc) {
 	descs <- c.connectionsTop
 	descs <- c.deadlockCount
 	descs <- c.lockTimeoutCount
+	descs <- c.lockEscalsTotal
+	descs <- c.currentLockWaits
 	descs <- c.lockUsage
 	descs <- c.lockWaitTime
 	descs <- c.logOperations
@@ -200,6 +218,11 @@ func (c *Collector) Collect(metrics chan<- prometheus.Metric) {
 
 	if err := c.collectLockMetrics(metrics); err != nil {
 		level.Error(c.logger).Log("msg", "Failed to collect lock metrics.", "err", err)
+		up = 0
+	}
+
+	if err := c.collectDetailedLockWaits(metrics); err != nil {
+		level.Error(c.logger).Log("msg", "Failed to collect detailed lock wait metrics.", "err", err)
 		up = 0
 	}
 
@@ -312,8 +335,8 @@ func (c *Collector) collectLockMetrics(metrics chan<- prometheus.Metric) error {
 	defer rows.Close()
 
 	for rows.Next() {
-		var lock_waiting, lock_active, lock_wait_time, lock_timeout_count float64
-		if err := rows.Scan(&lock_waiting, &lock_active, &lock_wait_time, &lock_timeout_count); err != nil {
+		var lock_waiting, lock_active, lock_wait_time, lock_timeout_count, lock_escals float64
+		if err := rows.Scan(&lock_waiting, &lock_active, &lock_wait_time, &lock_timeout_count, &lock_escals); err != nil {
 			return fmt.Errorf("failed to scan row: %w", err)
 		}
 
@@ -321,6 +344,27 @@ func (c *Collector) collectLockMetrics(metrics chan<- prometheus.Metric) error {
 		metrics <- prometheus.MustNewConstMetric(c.lockUsage, prometheus.GaugeValue, lock_active, c.dbName, "active")
 		metrics <- prometheus.MustNewConstMetric(c.lockWaitTime, prometheus.GaugeValue, lock_wait_time, c.dbName)
 		metrics <- prometheus.MustNewConstMetric(c.lockTimeoutCount, prometheus.CounterValue, lock_timeout_count, c.dbName)
+		metrics <- prometheus.MustNewConstMetric(c.lockEscalsTotal, prometheus.CounterValue, lock_escals, c.dbName)
+	}
+
+	return rows.Err()
+}
+
+func (c *Collector) collectDetailedLockWaits(metrics chan<- prometheus.Metric) error {
+	rows, err := c.db.Query(detailedLockWaitsQuery)
+	if err != nil {
+		return fmt.Errorf("failed to query lock waits: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var lockMode, objectType string
+		var waitCount float64
+		if err := rows.Scan(&lockMode, &objectType, &waitCount); err != nil {
+			return fmt.Errorf("failed to scan row: %w", err)
+		}
+
+		metrics <- prometheus.MustNewConstMetric(c.currentLockWaits, prometheus.GaugeValue, waitCount, c.dbName, lockMode, objectType)
 	}
 
 	return rows.Err()
