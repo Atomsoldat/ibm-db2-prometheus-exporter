@@ -23,6 +23,7 @@ import (
 type Config struct {
 	DSN          string
 	DatabaseName string
+	LockWaitLogThreshold float64 // seconds, 0 = disabled
 }
 
 var (

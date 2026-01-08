@@ -39,6 +39,7 @@ var (
 	metricPath = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").Envar("IBM_DB2_EXPORTER_WEB_TELEMETRY_PATH").String()
 	dsn        = kingpin.Flag("dsn", "The connection string (data source name) to use to connect to the database when querying metrics.").Envar("IBM_DB2_EXPORTER_DSN").Required().String()
 	db         = kingpin.Flag("db", "The database to connect to when querying metrics.").Envar("IBM_DB2_EXPORTER_DB").Required().String()
+	lockWaitLogThreshold = kingpin.Flag("lock-wait-log-threshold", "Emit structured logs for lock waits exceeding this threshold in seconds. 0 disables logging.").Default("0").Envar("IBM_DB2_EXPORTER_LOCK_WAIT_LOG_THRESHOLD").Float64()
 )
 
 const (
@@ -69,6 +70,7 @@ func main() {
 	c := &collector.Config{
 		DSN:          *dsn,
 		DatabaseName: *db,
+		LockWaitLogThreshold: *lockWaitLogThreshold,
 	}
 
 	if err := c.Validate(); err != nil {

@@ -246,6 +246,9 @@ func (c *Collector) Collect(metrics chan<- prometheus.Metric) {
 		up = 0
 	}
 
+	// Emit structured logs for long lock waits if enabled
+	c.logLongLockWaits()
+
 	metrics <- prometheus.MustNewConstMetric(c.dbUp, prometheus.GaugeValue, up, c.dbName)
 }
 
@@ -368,6 +371,72 @@ func (c *Collector) collectDetailedLockWaits(metrics chan<- prometheus.Metric) e
 	}
 
 	return rows.Err()
+}
+
+func (c *Collector) logLongLockWaits() {
+	// Skip if logging is disabled
+	if c.config.LockWaitLogThreshold <= 0 {
+		return
+	}
+
+	// Convert threshold from seconds to microseconds for DB2 query
+	thresholdMicros := int64(c.config.LockWaitLogThreshold * 1_000_000)
+
+	rows, err := c.db.Query(lockWaitDetailsQuery, thresholdMicros)
+	if err != nil {
+		level.Error(c.logger).Log("msg", "Failed to query lock wait details for logging", "err", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var agentID, applicationHandle int64
+		var applicationName, authID, lockMode, lockModeRequested, lockObjectType string
+		var lockWaitTimeMicros int64
+		var tabSchema, tabName, stmtText string
+		var blockerHandle sql.NullInt64
+
+		if err := rows.Scan(
+			&agentID,
+			&applicationHandle,
+			&applicationName,
+			&authID,
+			&lockMode,
+			&lockModeRequested,
+			&lockObjectType,
+			&lockWaitTimeMicros,
+			&tabSchema,
+			&tabName,
+			&stmtText,
+			&blockerHandle,
+		); err != nil {
+			level.Error(c.logger).Log("msg", "Failed to scan lock wait detail", "err", err)
+			continue
+		}
+
+		lockWaitSeconds := float64(lockWaitTimeMicros) / 1_000_000
+
+		logFields := []interface{}{
+			"msg", "Long lock wait detected",
+			"agent_id", agentID,
+			"application_handle", applicationHandle,
+			"application_name", applicationName,
+			"auth_id", authID,
+			"lock_mode", lockMode,
+			"lock_mode_requested", lockModeRequested,
+			"lock_object_type", lockObjectType,
+			"lock_wait_seconds", lockWaitSeconds,
+			"tabschema", tabSchema,
+			"tabname", tabName,
+			"stmt_text", stmtText,
+		}
+
+		if blockerHandle.Valid {
+			logFields = append(logFields, "blocker_application_handle", blockerHandle.Int64)
+		}
+
+		level.Info(c.logger).Log(logFields...)
+	}
 }
 
 func (c *Collector) collectRowMetrics(metrics chan<- prometheus.Metric) error {
