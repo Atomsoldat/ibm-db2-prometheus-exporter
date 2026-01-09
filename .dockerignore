@@ -1,0 +1,28 @@
+# Git files
+.git
+.gitignore
+
+# Documentation
+*.md
+LICENSE
+
+# Build artifacts
+bin/
+*.exe
+*.test
+*.out
+setenv.sh
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# CI/CD
+.github/
+
+# Docker files
+Dockerfile*
+.dockerignore
